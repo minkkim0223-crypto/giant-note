@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>거인의 공부 종합 앱</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <style>
+        @keyframes stamp {
+            0% { transform: scale(2) rotate(-20deg); opacity: 0; }
+            50% { transform: scale(0.9) rotate(-10deg); opacity: 1; }
+            100% { transform: scale(1) rotate(-12deg); opacity: 0.8; }
+        }
+        .stamp-box {
+            border: 4px solid #ef4444; border-radius: 50%; color: #ef4444; font-weight: 900;
+            display: flex; justify-content: center; align-items: center; text-align: center;
+            line-height: 1.2; transform: rotate(-12deg);
+            box-shadow: inset 0 0 0 2px #ef4444, 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        .animate-stamp { animation: stamp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes fadeInUp {
+            0% { opacity: 0; transform: translateY(20px); opacity: 0; }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+        .toast-animation { animation: fadeInUp 0.4s ease forwards; }
+
+        /* 사이드바 네비게이션 (태블릿/데스크탑) */
+        .sidebar-nav { display: none; }
+        .bottom-nav { display: flex; }
+        .main-layout { flex-direction: column; }
+        .content-area { width: 100%; }
+
+        @media (min-width: 768px) {
+            .sidebar-nav { display: flex; flex-direction: column; width: 220px; min-height: 100vh; background: #1e3a5f; }
+            .bottom-nav { display: none; }
+            .main-layout { flex-direction: row; }
+            .content-area { flex: 1; overflow-y: auto; }
+            body { justify-content: flex-start; }
+            #root { max-width: 100%; width: 100%; height: 100vh; }
+        }
+
+        @media (min-width: 1024px) {
+            .sidebar-nav { width: 260px; }
+        }
+
+        .sidebar-item { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: rgba(255,255,255,0.7); cursor: pointer; transition: all 0.2s; border-left: 3px solid transparent; font-size: 15px; font-weight: 600; }
+        .sidebar-item:hover { background: rgba(255,255,255,0.08); color: white; }
+        .sidebar-item.active { background: rgba(255,255,255,0.15); color: white; border-left-color: #60a5fa; }
+        .sidebar-item .icon { font-size: 20px; width: 28px; text-align: center; }
+    </style>
+</head>
+<body class="bg-gray-100 flex justify-center h-screen m-0 overflow-hidden">
+    <div id="root" class="w-full max-w-md bg-white h-full shadow-2xl overflow-hidden flex flex-col relative md:max-w-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        const FIREBASE_CONFIG = {
+            apiKey: "AIzaSyB1nk2yq4QhLpd6mEeCUhmZnLfoQ52nVlI",
+            authDomain: "giant-note.firebaseapp.com",
+            projectId: "giant-note"
+        };
+        const GOOGLE_CLIENT_ID = "647503400558-acegpfk8j1nust43ges5gur57qassv8c.apps.googleusercontent.com";
+
+        let db, auth;
+        try {
+            if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+            db = firebase.firestore();
+            auth = firebase.auth();
+        } catch(e) { console.error("Firebase 초기화 오류:", e); }
+
+        const affirmations = [
+            "아침 햇살을 기분 좋게 느끼며, 평온한 미소로 활기차게 하루를 시작한다.",
+            "아이와 다정하게 눈을 맞추고, 따뜻한 목소리로 공감하며 대화한다.",
+            "차분한 호흡으로 할 일을 하나씩 지워가며, 짜릿한 성취감을 맛본다.",
+            "시원하게 비워낸 깨끗한 방바닥을 맨발로 딛으며, 쾌적한 공기를 깊게 마신다.",
+            "남편과 마주 앉아 따뜻한 차를 마시며, 서로를 응원하고 든든하게 안아준다.",
+            "내 강점인 일에 깊게 몰입하며, 통장에 찍힌 넉넉한 숫자를 보며 보람을 느낀다.",
+            "아삭한 채소를 먹고 땀 흘려 운동한 뒤, 가뿐해진 내 몸을 진심으로 사랑한다.",
+            "넉넉해진 지갑으로 원하는 것을 기분 좋게 결제하며 여유롭게 미소 짓는다.",
+            "거울 속 내 눈을 보며 '멋지게 성장하고 있어'라고 칭찬하고, 나다운 삶을 즐긴다.",
+            "고요한 저녁, 종이책의 질감을 느끼며 읽고 사각거리는 펜 소리로 내일을 기록한다."
+        ];
+        const motivationalQuotes = [
+            "작은 실행이 모여 거대한 성장을 만듭니다! 🚀",
+            "완벽함보다 치밀한 설계! 오늘도 응원합니다. 💪",
+            "기록하는 순간, 이미 당신의 삶은 변하기 시작했습니다. ✨",
+            "과제가 작아질수록 실행 마찰력은 줄어듭니다. 화이팅! 🔥",
+            "시간의 밀도를 높이는 하루, 당신의 성장을 지지합니다. 🌱",
+            "막연한 의도를 손에 잡히는 결과로! 잘하셨어요. 🎯"
+        ];
+
+        const TODO_CATEGORIES = ['업무', '생활', '개인성장', '기타'];
+        const IDEA_CATEGORIES = ['업무', '생활', '앱아이디어', '기타'];
+
+        const formatDate = (year, month, day) =>
+            `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+
+        const NAV_ITEMS = [
+            { id: 'summary', icon: '📊', label: '요약' },
+            { id: 'home', icon: '🏠', label: '홈' },
+            { id: 'tpt', icon: '🎯', label: '원씽' },
+            { id: 'pdrf', icon: '⚙️', label: 'PDRF' },
+            { id: '4l', icon: '📝', label: '회고' },
+            { id: 'todo', icon: '📋', label: 'To-do' },
+            { id: 'ideas', icon: '💡', label: '아이디어' },
+            { id: 'settings', icon: '⚙️', label: '설정' },
+        ];
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('summary');
+            const [checkedItems, setCheckedItems] = useState(new Array(10).fill(false));
+            const progress = Math.round((checkedItems.filter(Boolean).length / 10) * 100);
+            const today = new Date();
+            const todayString = formatDate(today.getFullYear(), today.getMonth(), today.getDate());
+            const [selectedDate, setSelectedDate] = useState(todayString);
+            const [tptRecords, setTptRecords] = useState({});
+            const [pdrfRecords, setPdrfRecords] = useState({});
+            const [retroRecords, setRetroRecords] = useState({});
+            const [todoItems, setTodoItems] = useState([]);
+            const [ideaItems, setIdeaItems] = useState([]);
+            const [selectedPdrfId, setSelectedPdrfId] = useState(null);
+            const [toastMessage, setToastMessage] = useState('');
+            const [user, setUser] = useState(null);
+            const [isLoggingIn, setIsLoggingIn] = useState(false);
+            const [timerActive, setTimerActive] = useState(false);
+            const [timeLeft, setTimeLeft] = useState(300);
+            const timerRef = useRef(null);
+            const [microInput, setMicroInput] = useState('');
+
+            // Todo state
+            const [todoInput, setTodoInput] = useState('');
+            const [todoCategory, setTodoCategory] = useState('업무');
+            const [activeTodoCategory, setActiveTodoCategory] = useState('전체');
+
+            // Idea state
+            const [ideaTitle, setIdeaTitle] = useState('');
+            const [ideaContent, setIdeaContent] = useState('');
+            const [ideaCategory, setIdeaCategory] = useState('업무');
+            const [activeIdeaCategory, setActiveIdeaCategory] = useState('전체');
+            const [expandedIdea, setExpandedIdea] = useState(null);
+
+            const currentTpt = tptRecords[selectedDate] || { time:'', place:'', task:'', isCompleted:false };
+            const currentPdrfList = pdrfRecords[selectedDate] || [];
+            const activePdrf = currentPdrfList.find(t => t.id === selectedPdrfId) || null;
+            const currentRetro = retroRecords[selectedDate] || { liked:'', lacked:'', learned:'', longedFor:'', giantFeedback:'', isCompleted:false };
+
+            useEffect(() => { setSelectedPdrfId(null); setTimerActive(false); setTimeLeft(300); }, [selectedDate, activeTab]);
+            useEffect(() => { setTimerActive(false); setTimeLeft(300); }, [selectedPdrfId]);
+
+            useEffect(() => {
+                if (!auth) return;
+                const unsub = auth.onAuthStateChanged(currentUser => {
+                    if (currentUser) {
+                        setUser(currentUser);
+                        setIsLoggingIn(false);
+                        const uid = currentUser.uid;
+                        db.collection('users').doc(uid).collection('tptRecords').onSnapshot(snap => {
+                            const r = {}; snap.forEach(d => { r[d.id] = d.data(); }); setTptRecords(r);
+                        });
+                        db.collection('users').doc(uid).collection('pdrfRecords').onSnapshot(snap => {
+                            const r = {}; snap.forEach(d => { const data = d.data(); r[d.id] = data.tasks||[]; }); setPdrfRecords(r);
+                        });
+                        db.collection('users').doc(uid).collection('retroRecords').onSnapshot(snap => {
+                            const r = {}; snap.forEach(d => { r[d.id] = d.data(); }); setRetroRecords(r);
+                        });
+                        db.collection('users').doc(uid).collection('todoItems').orderBy('createdAt','desc').onSnapshot(snap => {
+                            setTodoItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        });
+                        db.collection('users').doc(uid).collection('ideaItems').orderBy('createdAt','desc').onSnapshot(snap => {
+                            setIdeaItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        });
+                    } else {
+                        setUser(null); setIsLoggingIn(false);
+                        setTodoItems([]); setIdeaItems([]);
+                    }
+                });
+                return () => unsub();
+            }, []);
+
+            const handleGoogleCredential = useCallback(async (response) => {
+                setIsLoggingIn(true);
+                try {
+                    const credential = firebase.auth.GoogleAuthProvider.credential(response.credential);
+                    await auth.signInWithCredential(credential);
+                } catch(error) {
+                    console.error("GSI 로그인 오류:", error);
+                    setIsLoggingIn(false);
+                    alert("로그인 오류: " + error.message);
+                }
+            }, []);
+
+            useEffect(() => {
+                if (user) return;
+                const init = () => {
+                    if (!window.google || !window.google.accounts) return;
+                    window.google.accounts.id.initialize({
+                        client_id: GOOGLE_CLIENT_ID,
+                        callback: handleGoogleCredential,
+                        auto_select: false,
+                        ux_mode: 'popup',
+                    });
+                };
+                if (window.google && window.google.accounts) { init(); }
+                else {
+                    const s = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+                    if (s) s.addEventListener('load', init);
+                    setTimeout(init, 1500);
+                }
+            }, [handleGoogleCredential, user]);
+
+            const signInWithGoogle = async () => {
+                if (!window.google || !window.google.accounts) {
+                    alert("Google 로그인을 준비 중입니다. 잠시 후 다시 시도해주세요.");
+                    return;
+                }
+                setIsLoggingIn(true);
+                try {
+                    window.google.accounts.id.prompt((notification) => {
+                        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+                            // One Tap 차단 시 OAuth 팝업으로 폴백
+                            const client = window.google.accounts.oauth2.initTokenClient({
+                                client_id: GOOGLE_CLIENT_ID,
+                                scope: 'email profile',
+                                callback: async (tokenResponse) => {
+                                    if (tokenResponse.error) {
+                                        setIsLoggingIn(false);
+                                        alert("로그인 오류: " + tokenResponse.error);
+                                        return;
+                                    }
+                                    try {
+                                        const credential = firebase.auth.GoogleAuthProvider.credential(null, tokenResponse.access_token);
+                                        await auth.signInWithCredential(credential);
+                                    } catch(e) {
+                                        setIsLoggingIn(false);
+                                        alert("로그인 오류: " + e.message);
+                                    }
+                                },
+                            });
+                            client.requestAccessToken();
+                        }
+                    });
+                } catch(e) {
+                    setIsLoggingIn(false);
+                    alert("로그인 오류: " + e.message);
+                }
+            };
+
+            const showToast = (msg) => { setToastMessage(msg); setTimeout(() => setToastMessage(''), 3000); };
+            const changeDate = (offset) => {
+                const [y,m,d] = selectedDate.split('-').map(Number);
+                const dt = new Date(y, m-1, d+offset);
+                setSelectedDate(formatDate(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+            };
+
+            const handleTptChange = (field, value) => {
+                const nr = { ...currentTpt, [field]: value };
+                setTptRecords(p => ({ ...p, [selectedDate]: nr }));
+                if (user) db.collection('users').doc(user.uid).collection('tptRecords').doc(selectedDate).set(nr);
+            };
+            const toggleComplete = () => {
+                const nr = { ...currentTpt, isCompleted: !currentTpt.isCompleted };
+                setTptRecords(p => ({ ...p, [selectedDate]: nr }));
+                if (user) db.collection('users').doc(user.uid).collection('tptRecords').doc(selectedDate).set(nr);
+                if (!currentTpt.isCompleted) showToast("🎉 " + motivationalQuotes[Math.floor(Math.random()*motivationalQuotes.length)]);
+            };
+
+            const updatePdrfList = (newList) => {
+                setPdrfRecords(p => ({ ...p, [selectedDate]: newList }));
+                if (user) db.collection('users').doc(user.uid).collection('pdrfRecords').doc(selectedDate).set({ tasks: newList });
+            };
+            const createNewPdrf = () => {
+                const t = { id: Date.now(), step:1, mainTask:'', microTasks:[], record:'', feedback:'' };
+                updatePdrfList([...currentPdrfList, t]); setSelectedPdrfId(t.id);
+            };
+            const deletePdrf = (id) => {
+                if (confirm("이 과제를 삭제하시겠습니까?")) { updatePdrfList(currentPdrfList.filter(t => t.id !== id)); if (selectedPdrfId===id) setSelectedPdrfId(null); }
+            };
+            const updateActivePdrf = (updates) => updatePdrfList(currentPdrfList.map(t => t.id===selectedPdrfId ? {...t,...updates} : t));
+            const addMicroTask = () => {
+                if (!microInput.trim() || !activePdrf) return;
+                updateActivePdrf({ microTasks: [...activePdrf.microTasks, { id:Date.now(), text:microInput, done:false }] }); setMicroInput('');
+            };
+            const toggleMicroTask = (id) => {
+                if (!activePdrf) return;
+                updateActivePdrf({ microTasks: activePdrf.microTasks.map(t => t.id===id ? {...t,done:!t.done} : t) });
+            };
+
+            useEffect(() => {
+                if (timerActive && timeLeft > 0) { timerRef.current = setInterval(() => setTimeLeft(p=>p-1), 1000); }
+                else if (timerActive && timeLeft === 0) { setTimerActive(false); clearInterval(timerRef.current); showToast("시간이 종료되었습니다!"); }
+                return () => clearInterval(timerRef.current);
+            }, [timerActive, timeLeft]);
+            const formatTime = (s) => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+
+            const handleRetroChange = (field, value) => {
+                const nr = { ...currentRetro, [field]: value };
+                setRetroRecords(p => ({ ...p, [selectedDate]: nr }));
+                if (user) db.collection('users').doc(user.uid).collection('retroRecords').doc(selectedDate).set(nr);
+            };
+            const handleCompleteRetro = () => {
+                if (!currentRetro.liked && !currentRetro.lacked && !currentRetro.learned && !currentRetro.longedFor) return alert("기록을 조금이라도 남겨주세요!");
+                handleRetroChange('isCompleted', !currentRetro.isCompleted);
+                if (!currentRetro.isCompleted) showToast("오늘 하루도 정말 고생 많으셨습니다. 완벽한 매듭이네요! 🌙");
+            };
+
+            // Todo 핸들러
+            const addTodo = () => {
+                if (!todoInput.trim()) return;
+                const item = { text: todoInput, category: todoCategory, done: false, createdAt: Date.now() };
+                if (user) {
+                    db.collection('users').doc(user.uid).collection('todoItems').add(item);
+                } else {
+                    setTodoItems(p => [{ id: Date.now().toString(), ...item }, ...p]);
+                }
+                setTodoInput('');
+            };
+            const toggleTodo = (id, done) => {
+                if (user) {
+                    db.collection('users').doc(user.uid).collection('todoItems').doc(id).update({ done: !done });
+                } else {
+                    setTodoItems(p => p.map(t => t.id===id ? {...t, done:!t.done} : t));
+                }
+            };
+            const deleteTodo = (id) => {
+                if (user) {
+                    db.collection('users').doc(user.uid).collection('todoItems').doc(id).delete();
+                } else {
+                    setTodoItems(p => p.filter(t => t.id!==id));
+                }
+            };
+
+            // Idea 핸들러
+            const addIdea = () => {
+                if (!ideaTitle.trim()) return;
+                const item = { title: ideaTitle, content: ideaContent, category: ideaCategory, createdAt: Date.now() };
+                if (user) {
+                    db.collection('users').doc(user.uid).collection('ideaItems').add(item);
+                } else {
+                    setIdeaItems(p => [{ id: Date.now().toString(), ...item }, ...p]);
+                }
+                setIdeaTitle(''); setIdeaContent('');
+                showToast("아이디어가 저장되었습니다! 💡");
+            };
+            const deleteIdea = (id) => {
+                if (user) {
+                    db.collection('users').doc(user.uid).collection('ideaItems').doc(id).delete();
+                } else {
+                    setIdeaItems(p => p.filter(i => i.id!==id));
+                }
+            };
+
+            const filteredTodos = activeTodoCategory === '전체' ? todoItems : todoItems.filter(t => t.category === activeTodoCategory);
+            const filteredIdeas = activeIdeaCategory === '전체' ? ideaItems : ideaItems.filter(i => i.category === activeIdeaCategory);
+            const doneTodos = filteredTodos.filter(t => t.done);
+            const pendingTodos = filteredTodos.filter(t => !t.done);
+
+            const DateNav = () => (
+                <div class="flex justify-between items-center mb-6 bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
+                    <button onClick={() => changeDate(-1)} class="px-3 py-2 text-sm font-bold text-gray-500 hover:bg-gray-100 rounded-lg">◀ 어제</button>
+                    <div class="text-center"><span class="block text-[10px] text-gray-400 font-bold">선택한 날짜</span><span class="font-bold text-blue-600 text-sm">{selectedDate.split('-')[1]}월 {selectedDate.split('-')[2]}일</span></div>
+                    <button onClick={() => changeDate(1)} class="px-3 py-2 text-sm font-bold text-gray-500 hover:bg-gray-100 rounded-lg">내일 ▶</button>
+                </div>
+            );
+
+            const renderContent = () => {
+                switch(activeTab) {
+                    case 'home': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-2">오늘의 마인드셋 ☀️</h2>
+                            <p class="text-sm text-gray-500 mb-6">소리 내어 읽고 체크하며 하루의 주도권을 쥐어보세요.</p>
+                            <div class="mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                                <div class="flex justify-between text-sm mb-2 font-semibold text-gray-700"><span>긍정 확언 낭독 완료율</span><span class="text-blue-600">{progress}%</span></div>
+                                <div class="w-full bg-gray-200 rounded-full h-2"><div class="bg-blue-500 h-2 rounded-full transition-all duration-500" style={{width:`${progress}%`}}></div></div>
+                            </div>
+                            <div class="space-y-3">
+                                {affirmations.map((text,i) => (
+                                    <div key={i} onClick={() => { const n=[...checkedItems]; n[i]=!n[i]; setCheckedItems(n); }}
+                                        class={`flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-all ${checkedItems[i]?'bg-blue-50 border-blue-200':'bg-white border-gray-200 hover:border-blue-200'}`}>
+                                        <div class={`w-6 h-6 rounded-full border-2 flex-shrink-0 flex items-center justify-center mt-0.5 ${checkedItems[i]?'bg-blue-500 border-blue-500':'border-gray-300'}`}>
+                                            {checkedItems[i] && <span class="text-white text-xs font-bold">✓</span>}
+                                        </div>
+                                        <p class={`text-sm leading-relaxed ${checkedItems[i]?'text-blue-700 font-semibold line-through decoration-blue-300':'text-gray-700'}`}>{text}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    );
+
+                    case 'tpt': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-1">오늘의 원씽 🎯</h2>
+                            <p class="text-sm text-gray-500 mb-6">Time · Place · Task — 딱 하나만 정하고 실행하세요.</p>
+                            <DateNav />
+                            <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm space-y-4 relative">
+                                {currentTpt.isCompleted && (
+                                    <div class="absolute top-4 right-4 z-10 opacity-90 animate-stamp pointer-events-none">
+                                        <div class="stamp-box w-20 h-20 bg-white bg-opacity-90 text-xs">참<br/>잘했어요</div>
+                                    </div>
+                                )}
+                                <div><label class="block text-xs font-bold text-gray-500 mb-1">⏰ Time (언제)</label><input type="text" placeholder="예: 오전 9시 ~ 10시" class="w-full p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-blue-400" value={currentTpt.time} onChange={e => handleTptChange('time',e.target.value)} /></div>
+                                <div><label class="block text-xs font-bold text-gray-500 mb-1">📍 Place (어디서)</label><input type="text" placeholder="예: 카페, 도서관, 내 방 책상" class="w-full p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-blue-400" value={currentTpt.place} onChange={e => handleTptChange('place',e.target.value)} /></div>
+                                <div><label class="block text-xs font-bold text-gray-500 mb-1">✏️ Task (무엇을)</label><textarea rows="3" placeholder="예: 책 1장 읽고 핵심 문장 3개 필사하기" class="w-full p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-blue-400" value={currentTpt.task} onChange={e => handleTptChange('task',e.target.value)}></textarea></div>
+                                <button onClick={toggleComplete} class={`w-full py-3 rounded-lg font-bold text-white transition-colors shadow-md ${currentTpt.isCompleted?'bg-gray-400 hover:bg-gray-500':'bg-blue-600 hover:bg-blue-700'}`}>
+                                    {currentTpt.isCompleted?'✓ 완료됨 (취소하기)':'🎯 원씽 완료!'}
+                                </button>
+                            </div>
+                        </div>
+                    );
+
+                    case 'pdrf': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-1">PDRF 실행 엔진 ⚙️</h2>
+                            <p class="text-sm text-gray-500 mb-6">Plan → Do & Record → Feedback 사이클로 과제를 완수하세요.</p>
+                            <DateNav />
+                            {!activePdrf ? (
+                                <div>
+                                    <div class="space-y-3 mb-4">
+                                        {currentPdrfList.length===0 ? (
+                                            <p class="text-sm text-gray-400 text-center py-8 bg-gray-50 rounded-xl border border-dashed">아직 추가된 과제가 없습니다.<br/>아래 버튼으로 새 과제를 시작하세요!</p>
+                                        ) : currentPdrfList.map(task => (
+                                            <div key={task.id} onClick={() => setSelectedPdrfId(task.id)}
+                                                class={`flex items-center gap-3 p-4 rounded-xl border cursor-pointer transition-all hover:shadow-md ${task.step===4?'bg-gray-50 border-gray-200':'bg-white border-blue-100 hover:border-blue-300'}`}>
+                                                <div class={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${task.step===4?'bg-green-100 text-green-600':'bg-blue-100 text-blue-700'}`}>{task.step===4?'✓':`P${task.step}`}</div>
+                                                <div class="flex-1 min-w-0">
+                                                    <p class={`font-bold text-sm truncate ${task.step===4?'text-gray-400 line-through':'text-gray-800'}`}>{task.mainTask||'(과제명 미입력)'}</p>
+                                                    <p class="text-[10px] text-gray-400 mt-0.5">{task.step===4?'완료됨':['','Plan 단계','Do & Record 단계','Feedback 단계'][task.step]}</p>
+                                                </div>
+                                                <div class="flex items-center gap-3">
+                                                    <button onClick={e=>{e.stopPropagation();deletePdrf(task.id);}} class="text-red-400 text-[10px] font-bold px-2 py-1 bg-red-50 rounded">삭제</button>
+                                                    <span class="text-gray-300">➔</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <button onClick={createNewPdrf} class="w-full py-4 rounded-xl border-2 border-dashed border-blue-300 text-blue-600 font-bold hover:bg-blue-50 transition-colors flex items-center justify-center gap-2"><span class="text-xl">+</span> 새로운 과제 추가하기</button>
+                                </div>
+                            ) : (
+                                <div>
+                                    <button onClick={() => setSelectedPdrfId(null)} class="mb-4 text-sm text-gray-500 font-bold flex items-center gap-1">◀ 목록으로 돌아가기</button>
+                                    <div class="flex justify-between items-center mb-6">
+                                        {['Plan','Do & Record','Feedback'].map((label,idx) => {
+                                            const stepNum=idx+1; const isActive=activePdrf.step===stepNum; const isPast=activePdrf.step>stepNum||activePdrf.step===4;
+                                            return (
+                                                <div key={label} class="flex flex-col items-center flex-1 relative">
+                                                    <div class={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm z-10 ${isActive?'bg-blue-600 text-white shadow-md':isPast?'bg-blue-200 text-blue-800':'bg-gray-200 text-gray-400'}`}>{isPast?'✓':stepNum}</div>
+                                                    <span class={`text-[10px] mt-1 font-bold ${isActive?'text-blue-600':'text-gray-400'}`}>{label}</span>
+                                                    {idx<2&&<div class={`absolute top-4 left-1/2 w-full h-1 -z-0 ${isPast?'bg-blue-200':'bg-gray-200'}`}></div>}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    {activePdrf.step===4&&<div class="bg-green-50 text-green-700 p-4 rounded-xl border border-green-200 mb-4 text-center text-sm font-bold">🎉 성공적으로 완료한 과제입니다!<button onClick={()=>updateActivePdrf({step:1})} class="block mx-auto mt-2 text-xs text-blue-500 underline font-normal">다시 하기</button></div>}
+                                    {activePdrf.step===1&&(
+                                        <div class="bg-white p-5 rounded-xl border shadow-sm space-y-4">
+                                            <div class="border-b pb-3"><h3 class="font-bold text-gray-800 text-lg">1. Plan (만만하게 쪼개기)</h3></div>
+                                            <input type="text" placeholder="예: 독서 기록 1장 하기" class="w-full p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-blue-400" value={activePdrf.mainTask} onChange={e=>updateActivePdrf({mainTask:e.target.value})} />
+                                            <div class="bg-blue-50/50 p-4 rounded-lg border border-blue-100">
+                                                <label class="block text-xs font-bold text-blue-700 mb-2">마이크로 태스크</label>
+                                                <div class="flex gap-2 mb-3"><input type="text" placeholder="예: 무조건 책 펴기" class="flex-1 p-2 bg-white rounded border text-sm" value={microInput} onChange={e=>setMicroInput(e.target.value)} onKeyPress={e=>e.key==='Enter'&&addMicroTask()} /><button onClick={addMicroTask} class="px-4 bg-blue-600 text-white rounded font-bold text-sm">+</button></div>
+                                                <ul class="space-y-2">{activePdrf.microTasks.map(t=><li key={t.id} class="flex items-center gap-2 text-sm text-gray-700 bg-white p-2 rounded border shadow-sm"><span class="text-blue-500">•</span>{t.text}</li>)}</ul>
+                                            </div>
+                                            <button onClick={()=>updateActivePdrf({step:2})} disabled={!activePdrf.mainTask} class="w-full py-3 rounded-lg font-bold text-white bg-gray-800 disabled:opacity-50">실행 넘어가기 ➔</button>
+                                        </div>
+                                    )}
+                                    {activePdrf.step===2&&(
+                                        <div class="bg-white p-5 rounded-xl border shadow-sm space-y-4">
+                                            <div class="border-b pb-3 flex justify-between"><h3 class="font-bold text-gray-800 text-lg">2. Do & Record</h3><button onClick={()=>updateActivePdrf({step:1})} class="text-xs text-blue-500 underline">수정</button></div>
+                                            <div class="bg-gray-50 p-4 rounded-lg border">
+                                                <h4 class="font-bold text-blue-700 text-sm mb-3">🎯 {activePdrf.mainTask}</h4>
+                                                <div class="space-y-2">{activePdrf.microTasks.map(t=><label key={t.id} class="flex items-center gap-3"><input type="checkbox" checked={t.done} onChange={()=>toggleMicroTask(t.id)} class="w-5 h-5 rounded text-blue-600" /><span class={`text-sm ${t.done?'text-gray-400 line-through':'text-gray-700'}`}>{t.text}</span></label>)}</div>
+                                            </div>
+                                            <div class="flex flex-col items-center bg-blue-50 p-4 rounded-lg border border-blue-200">
+                                                <span class="text-xs font-bold text-blue-600 mb-1">딱 5분만 집중하기</span>
+                                                <div class="text-4xl font-black text-gray-800 font-mono mb-3">{formatTime(timeLeft)}</div>
+                                                <div class="flex gap-2">
+                                                    <button onClick={()=>setTimerActive(!timerActive)} class={`px-6 py-2 rounded-full font-bold text-sm text-white ${timerActive?'bg-orange-500':'bg-blue-600'}`}>{timerActive?'일시정지':(timeLeft<300?'재개':'시작하기')}</button>
+                                                    <button onClick={()=>{setTimerActive(false);setTimeLeft(300);}} class="px-4 py-2 rounded-full font-bold text-sm text-gray-600 bg-gray-200">리셋</button>
+                                                </div>
+                                            </div>
+                                            <textarea placeholder="Record: 감각이 날아가기 전에 키워드만 툭!" rows="2" class="w-full p-3 bg-gray-50 rounded-lg text-sm border" value={activePdrf.record} onChange={e=>updateActivePdrf({record:e.target.value})}></textarea>
+                                            <button onClick={()=>{setTimerActive(false);updateActivePdrf({step:3});}} class="w-full py-3 rounded-lg font-bold text-white bg-gray-800">실행 멈추고 복기하기 ➔</button>
+                                        </div>
+                                    )}
+                                    {activePdrf.step>=3&&activePdrf.step<=4&&(
+                                        <div class="bg-white p-5 rounded-xl border shadow-sm space-y-4">
+                                            <div class="border-b pb-3 flex justify-between"><h3 class="font-bold text-gray-800 text-lg">3. Feedback</h3>{activePdrf.step!==4&&<button onClick={()=>updateActivePdrf({step:2})} class="text-xs text-blue-500 underline">뒤로</button>}</div>
+                                            <div class="bg-gray-50 p-4 rounded-lg text-sm text-gray-700"><span class="font-bold text-blue-600 block mb-1">단서:</span>{activePdrf.record||'기록 없음'}</div>
+                                            <textarea placeholder="Feedback: 그래서 다음번엔 어떻게 할까?" rows="3" class="w-full p-3 bg-white rounded-lg text-sm border" value={activePdrf.feedback} onChange={e=>updateActivePdrf({feedback:e.target.value})} disabled={activePdrf.step===4}></textarea>
+                                            {activePdrf.step!==4&&<button onClick={()=>{showToast("훌륭합니다! 🎉");updateActivePdrf({step:4});setTimeout(()=>setSelectedPdrfId(null),1000);}} class="w-full py-3 rounded-lg font-bold text-white bg-green-600">피드백 저장 ➔</button>}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+
+                    case '4l': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-1">4L 회고 및 매듭짓기 🌙</h2>
+                            <p class="text-sm text-gray-500 mb-6">자책을 멈추고, 하루의 사실과 배움을 마음에 새기세요.</p>
+                            <DateNav />
+                            {currentRetro.isCompleted&&(
+                                <div class="bg-indigo-50 text-indigo-800 p-4 rounded-xl border border-indigo-200 mb-6 text-center text-sm font-bold shadow-sm">
+                                    <div class="text-3xl mb-2">✨</div>단단하게 매듭지어진 하루입니다.
+                                    <button onClick={()=>handleRetroChange('isCompleted',false)} class="block mx-auto mt-3 text-xs text-indigo-500 underline font-normal bg-white px-3 py-1 rounded-full border border-indigo-100">수정하기</button>
+                                </div>
+                            )}
+                            <div class="space-y-4">
+                                {[
+                                    {key:'liked',color:'green',icon:'👍',label:'Liked (좋았던 점 / 작은 승리)',placeholder:'예: 오늘 계획했던 5분 독서를 마쳤다.'},
+                                    {key:'learned',color:'yellow',icon:'💡',label:'Learned (배운 점 / 깨달음)',placeholder:'예: 과제를 쪼개니 시작하기 수월하다.'},
+                                    {key:'lacked',color:'red',icon:'🤔',label:'Lacked (아쉬웠던 점 / 사실 기반)',placeholder:'예: 핑계로 스마트폰을 보며 1시간 낭비했다.'},
+                                    {key:'longedFor',color:'blue',icon:'🎯',label:'Long for (내일 바라는 점)',placeholder:'예: 내일은 눕기 전 폰을 거실에 두겠다.'},
+                                ].map(({key,color,icon,label,placeholder})=>(
+                                    <div key={key} class={`p-4 rounded-xl border ${currentRetro.isCompleted?'bg-gray-50 border-gray-200':`bg-${color}-50/50 border-${color}-200`}`}>
+                                        <label class={`block text-sm font-bold text-${color}-700 mb-2`}><span class="mr-1">{icon}</span>{label}</label>
+                                        <textarea placeholder={placeholder} rows="2" class={`w-full p-3 rounded-lg text-sm border focus:outline-none focus:ring-2 ${currentRetro.isCompleted?'bg-transparent text-gray-600 border-transparent resize-none':`bg-white border-${color}-200 focus:ring-${color}-400`}`} value={currentRetro[key]} onChange={e=>handleRetroChange(key,e.target.value)} disabled={currentRetro.isCompleted}></textarea>
+                                    </div>
+                                ))}
+                                <div class={`p-5 rounded-xl border-2 mt-6 ${currentRetro.isCompleted?'bg-gray-100 border-gray-200':'bg-purple-50/50 border-purple-300 shadow-sm'}`}>
+                                    <label class="block text-sm font-black text-purple-800 mb-2"><span class="mr-1 text-2xl">👤</span>거인의 피드백 (나에게 건네는 조언)</label>
+                                    <textarea placeholder="예: 아쉬운 점도 있지만 5분 독서를 해낸 건 훌륭해!" rows="3" class={`w-full p-3 rounded-lg text-sm border font-medium ${currentRetro.isCompleted?'bg-white text-gray-700 border-gray-200 resize-none shadow-inner':'bg-white border-purple-200 focus:ring-2 focus:ring-purple-400'}`} value={currentRetro.giantFeedback} onChange={e=>handleRetroChange('giantFeedback',e.target.value)} disabled={currentRetro.isCompleted}></textarea>
+                                </div>
+                            </div>
+                            {!currentRetro.isCompleted&&<button onClick={handleCompleteRetro} class="w-full py-4 mt-6 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md text-lg">기록 완료하고 하루 매듭짓기 🌙</button>}
+                        </div>
+                    );
+
+                    case 'todo': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-1">To-do List 📋</h2>
+                            <p class="text-sm text-gray-500 mb-6">생각날 때마다 바로 추가하세요.</p>
+
+                            {/* 입력 영역 */}
+                            <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-6 space-y-3">
+                                <div class="flex gap-2 flex-wrap">
+                                    {TODO_CATEGORIES.map(cat => (
+                                        <button key={cat} onClick={() => setTodoCategory(cat)}
+                                            class={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${todoCategory===cat?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{cat}</button>
+                                    ))}
+                                </div>
+                                <div class="flex gap-2">
+                                    <input type="text" placeholder="할 일을 입력하세요..." class="flex-1 p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-blue-400" value={todoInput} onChange={e=>setTodoInput(e.target.value)} onKeyPress={e=>e.key==='Enter'&&addTodo()} />
+                                    <button onClick={addTodo} class="px-5 bg-blue-600 text-white rounded-lg font-bold text-sm hover:bg-blue-700">추가</button>
+                                </div>
+                            </div>
+
+                            {/* 카테고리 필터 */}
+                            <div class="flex gap-2 flex-wrap mb-4">
+                                {['전체', ...TODO_CATEGORIES].map(cat => (
+                                    <button key={cat} onClick={() => setActiveTodoCategory(cat)}
+                                        class={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${activeTodoCategory===cat?'bg-gray-800 text-white':'bg-white text-gray-600 border hover:bg-gray-50'}`}>{cat} {cat==='전체'?`(${todoItems.length})`:''}</button>
+                                ))}
+                            </div>
+
+                            {/* 할 일 목록 */}
+                            {pendingTodos.length===0&&doneTodos.length===0 ? (
+                                <p class="text-sm text-gray-400 text-center py-10 bg-gray-50 rounded-xl border border-dashed">할 일을 추가해보세요! 📋</p>
+                            ) : (
+                                <div class="space-y-2">
+                                    {pendingTodos.map(item => (
+                                        <div key={item.id} class="flex items-center gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                                            <button onClick={() => toggleTodo(item.id, item.done)} class="w-6 h-6 rounded-full border-2 border-gray-300 hover:border-blue-400 flex-shrink-0 flex items-center justify-center transition-colors"></button>
+                                            <div class="flex-1 min-w-0">
+                                                <p class="text-sm text-gray-800 font-medium">{item.text}</p>
+                                                <span class="text-[10px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-full">{item.category}</span>
+                                            </div>
+                                            <button onClick={() => deleteTodo(item.id)} class="text-red-400 text-xs font-bold px-2 py-1 bg-red-50 rounded hover:bg-red-100">삭제</button>
+                                        </div>
+                                    ))}
+                                    {doneTodos.length>0&&(
+                                        <div class="mt-6">
+                                            <p class="text-xs font-bold text-gray-400 mb-2">✓ 완료된 항목 ({doneTodos.length})</p>
+                                            {doneTodos.map(item => (
+                                                <div key={item.id} class="flex items-center gap-3 bg-gray-50 p-4 rounded-xl border border-gray-100 mb-2">
+                                                    <button onClick={() => toggleTodo(item.id, item.done)} class="w-6 h-6 rounded-full bg-blue-500 flex-shrink-0 flex items-center justify-center">
+                                                        <span class="text-white text-xs font-bold">✓</span>
+                                                    </button>
+                                                    <div class="flex-1 min-w-0">
+                                                        <p class="text-sm text-gray-400 line-through">{item.text}</p>
+                                                        <span class="text-[10px] text-gray-400 font-bold bg-gray-100 px-2 py-0.5 rounded-full">{item.category}</span>
+                                                    </div>
+                                                    <button onClick={() => deleteTodo(item.id)} class="text-red-300 text-xs font-bold px-2 py-1 bg-red-50 rounded">삭제</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+
+                    case 'ideas': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-1">아이디어 노트 💡</h2>
+                            <p class="text-sm text-gray-500 mb-6">좋은 생각이 떠오르면 바로 기록하세요.</p>
+
+                            {/* 입력 영역 */}
+                            <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-6 space-y-3">
+                                <div class="flex gap-2 flex-wrap">
+                                    {IDEA_CATEGORIES.map(cat => (
+                                        <button key={cat} onClick={() => setIdeaCategory(cat)}
+                                            class={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${ideaCategory===cat?'bg-yellow-500 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{cat}</button>
+                                    ))}
+                                </div>
+                                <input type="text" placeholder="아이디어 제목" class="w-full p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-yellow-400" value={ideaTitle} onChange={e=>setIdeaTitle(e.target.value)} />
+                                <textarea placeholder="자세한 내용 (선택사항)" rows="2" class="w-full p-3 bg-gray-50 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-yellow-400" value={ideaContent} onChange={e=>setIdeaContent(e.target.value)}></textarea>
+                                <button onClick={addIdea} class="w-full py-3 bg-yellow-500 text-white rounded-lg font-bold text-sm hover:bg-yellow-600 transition-colors">💡 아이디어 저장</button>
+                            </div>
+
+                            {/* 카테고리 필터 */}
+                            <div class="flex gap-2 flex-wrap mb-4">
+                                {['전체', ...IDEA_CATEGORIES].map(cat => (
+                                    <button key={cat} onClick={() => setActiveIdeaCategory(cat)}
+                                        class={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${activeIdeaCategory===cat?'bg-gray-800 text-white':'bg-white text-gray-600 border hover:bg-gray-50'}`}>{cat}{cat==='전체'?` (${ideaItems.length})`:''}</button>
+                                ))}
+                            </div>
+
+                            {/* 아이디어 목록 */}
+                            {filteredIdeas.length===0 ? (
+                                <p class="text-sm text-gray-400 text-center py-10 bg-gray-50 rounded-xl border border-dashed">아이디어를 기록해보세요! 💡</p>
+                            ) : (
+                                <div class="space-y-3">
+                                    {filteredIdeas.map(item => (
+                                        <div key={item.id} class="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+                                            <div class="flex items-center gap-3 p-4 cursor-pointer" onClick={() => setExpandedIdea(expandedIdea===item.id?null:item.id)}>
+                                                <div class="w-9 h-9 rounded-full bg-yellow-100 flex items-center justify-center text-lg flex-shrink-0">💡</div>
+                                                <div class="flex-1 min-w-0">
+                                                    <p class="text-sm font-bold text-gray-800 truncate">{item.title}</p>
+                                                    <span class="text-[10px] text-yellow-700 font-bold bg-yellow-50 px-2 py-0.5 rounded-full">{item.category}</span>
+                                                </div>
+                                                <div class="flex items-center gap-2">
+                                                    <button onClick={e=>{e.stopPropagation();deleteIdea(item.id);}} class="text-red-400 text-xs font-bold px-2 py-1 bg-red-50 rounded">삭제</button>
+                                                    <span class="text-gray-300 text-sm">{expandedIdea===item.id?'▲':'▼'}</span>
+                                                </div>
+                                            </div>
+                                            {expandedIdea===item.id&&item.content&&(
+                                                <div class="px-4 pb-4">
+                                                    <div class="bg-yellow-50 p-3 rounded-lg border border-yellow-100 text-sm text-gray-700 whitespace-pre-wrap">{item.content}</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+
+                    case 'summary': return (
+                        <div class="p-5 md:p-8 max-w-3xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-1">하루 요약 📊</h2>
+                            <p class="text-sm text-gray-500 mb-6">나의 계획, 실행, 그리고 복기를 한눈에 조망하세요.</p>
+                            <DateNav />
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
+                                    <h3 class="font-bold text-gray-800 text-lg mb-3 border-b pb-2 flex items-center gap-2"><span>🎯</span>오늘의 원씽</h3>
+                                    {currentTpt.isCompleted&&<div class="absolute top-4 right-4 z-10 opacity-90 animate-stamp pointer-events-none"><div class="stamp-box w-16 h-16 bg-white bg-opacity-90 text-[10px]">참<br/>잘했어요</div></div>}
+                                    <div class="grid grid-cols-2 gap-2 text-sm mb-2">
+                                        <div><span class="font-bold text-gray-500">시간:</span> <span class="text-gray-800">{currentTpt.time||'-'}</span></div>
+                                        <div><span class="font-bold text-gray-500">장소:</span> <span class="text-gray-800">{currentTpt.place||'-'}</span></div>
+                                    </div>
+                                    <div class="text-sm"><span class="font-bold text-gray-500 block mb-1">과제:</span><div class="bg-gray-50 p-2 rounded text-gray-700">{currentTpt.task||'계획된 원씽이 없습니다.'}</div></div>
+                                </div>
+
+                                <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
+                                    <h3 class="font-bold text-gray-800 text-lg mb-3 border-b pb-2 flex items-center gap-2"><span>⚙️</span>PDRF 실행 엔진</h3>
+                                    {currentPdrfList.length===0 ? (
+                                        <p class="text-sm text-gray-400 text-center py-4 bg-gray-50 rounded-lg border border-dashed">실행한 과제가 없습니다.</p>
+                                    ) : (
+                                        <div class="space-y-2">{currentPdrfList.map(task=>(
+                                            <div key={task.id} class="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                                                <div class="flex items-center gap-2 mb-1">
+                                                    <span class={`text-[10px] font-bold px-2 py-0.5 rounded ${task.step===4?'bg-green-100 text-green-600':'bg-blue-100 text-blue-600'}`}>{task.step===4?'✓ 완료됨':'진행 중'}</span>
+                                                    <h4 class={`font-bold text-sm ${task.step===4?'text-gray-500 line-through':'text-gray-800'}`}>{task.mainTask||'이름 없는 과제'}</h4>
+                                                </div>
+                                                {task.feedback&&<p class="text-xs text-gray-600 mt-1"><span class="font-bold text-gray-500">복기:</span> {task.feedback}</p>}
+                                            </div>
+                                        ))}</div>
+                                    )}
+                                </div>
+
+                                <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm md:col-span-2">
+                                    <h3 class="font-bold text-gray-800 text-lg mb-3 border-b pb-2 flex items-center gap-2"><span>📝</span>4L 회고</h3>
+                                    {!currentRetro.liked&&!currentRetro.lacked&&!currentRetro.learned&&!currentRetro.longedFor ? (
+                                        <p class="text-sm text-gray-400 text-center py-4 bg-gray-50 rounded-lg border border-dashed">작성된 회고가 없습니다.</p>
+                                    ) : (
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                                            {currentRetro.liked&&<div class="bg-green-50/50 p-3 rounded-lg border border-green-100"><span class="font-bold text-green-700 block mb-1">👍 Liked</span><p class="text-gray-700 whitespace-pre-wrap">{currentRetro.liked}</p></div>}
+                                            {currentRetro.learned&&<div class="bg-yellow-50/50 p-3 rounded-lg border border-yellow-100"><span class="font-bold text-yellow-700 block mb-1">💡 Learned</span><p class="text-gray-700 whitespace-pre-wrap">{currentRetro.learned}</p></div>}
+                                            {currentRetro.lacked&&<div class="bg-red-50/50 p-3 rounded-lg border border-red-100"><span class="font-bold text-red-700 block mb-1">🤔 Lacked</span><p class="text-gray-700 whitespace-pre-wrap">{currentRetro.lacked}</p></div>}
+                                            {currentRetro.longedFor&&<div class="bg-blue-50/50 p-3 rounded-lg border border-blue-100"><span class="font-bold text-blue-700 block mb-1">🎯 Long for</span><p class="text-gray-700 whitespace-pre-wrap">{currentRetro.longedFor}</p></div>}
+                                            {currentRetro.giantFeedback&&<div class="bg-purple-50/50 p-3 rounded-lg border border-purple-200 md:col-span-2"><span class="font-bold text-purple-800 block mb-1">👤 거인의 피드백</span><p class="text-gray-800 font-medium whitespace-pre-wrap">{currentRetro.giantFeedback}</p></div>}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    );
+
+                    case 'settings': return (
+                        <div class="p-5 md:p-8 max-w-2xl mx-auto w-full">
+                            <h2 class="text-2xl font-bold text-gray-800 mb-4">설정 ⚙️</h2>
+                            <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
+                                <h3 class="text-lg font-bold text-gray-700 mb-4">계정 연결</h3>
+                                {user ? (
+                                    <div class="bg-green-50 p-4 rounded-lg border border-green-200 text-sm shadow-sm">
+                                        <div class="flex items-center gap-3 mb-3">
+                                            <div class="w-10 h-10 rounded-full bg-blue-200 flex items-center justify-center text-xl">👤</div>
+                                            <div>
+                                                <p class="font-bold text-gray-800">{user.displayName||'거인'} 님</p>
+                                                <p class="text-xs text-gray-500">{user.email}</p>
+                                            </div>
+                                        </div>
+                                        <p class="text-green-700 font-bold mb-4">✅ 완벽하게 연동되어 실시간 저장 중입니다.</p>
+                                        <button onClick={() => auth.signOut()} class="w-full py-2 bg-white border border-gray-300 rounded text-gray-600 font-bold hover:bg-gray-50">로그아웃</button>
+                                    </div>
+                                ) : (
+                                    <div class="space-y-3">
+                                        <p class="text-sm text-gray-500">Google 계정으로 로그인하면 모든 기기에서 데이터가 동기화됩니다.</p>
+                                        {isLoggingIn ? (
+                                            <div class="w-full py-3 bg-gray-100 rounded-lg flex items-center justify-center gap-2 text-gray-500 font-bold text-sm">
+                                                <svg class="animate-spin h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                                로그인 처리 중...
+                                            </div>
+                                        ) : (
+                                            <button onClick={signInWithGoogle} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:'10px',width:'100%',padding:'12px',border:'1px solid #dadce0',borderRadius:'8px',background:'white',fontSize:'14px',fontWeight:'600',color:'#3c4043',cursor:'pointer',boxShadow:'0 1px 3px rgba(0,0,0,0.1)'}}>
+                                                <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                                                Google 계정으로 로그인
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    );
+                    default: return null;
+                }
+            };
+
+            return (
+                <div class="flex flex-col h-full bg-gray-50 font-sans">
+                    {/* 모바일 헤더 */}
+                    <header class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center z-20 md:hidden flex-shrink-0">
+                        <h1 class="text-xl font-bold">거인의 공부</h1>
+                        <div class="flex items-center gap-2">
+                            {user ? (
+                                <span class="text-[10px] bg-green-500 px-2 py-1 rounded-full">동기화 됨</span>
+                            ) : (
+                                <span class="text-[10px] bg-yellow-500 px-2 py-1 rounded-full">로그인 필요</span>
+                            )}
+                            <button onClick={() => setActiveTab('settings')} class="text-sm bg-blue-700 px-3 py-1 rounded-full">⚙️</button>
+                        </div>
+                    </header>
+
+                    {/* 토스트 */}
+                    {toastMessage&&(
+                        <div class="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-5 py-3 rounded-full shadow-lg z-50 text-sm whitespace-nowrap toast-animation font-semibold">{toastMessage}</div>
+                    )}
+
+                    {/* 사이드바 + 콘텐츠 */}
+                    <div class="flex flex-1 overflow-hidden">
+                        {/* 사이드바 (태블릿/데스크탑) */}
+                        <nav class="sidebar-nav flex-shrink-0">
+                            <div class="p-5 border-b border-white/10">
+                                <h1 class="text-xl font-black text-white">거인의 공부</h1>
+                                {user ? (
+                                    <p class="text-xs text-green-400 mt-1 font-semibold">● 클라우드 동기화 됨</p>
+                                ) : (
+                                    <p class="text-xs text-yellow-400 mt-1 font-semibold">● 로그인 필요</p>
+                                )}
+                            </div>
+                            <div class="flex-1 py-2 overflow-y-auto">
+                                {NAV_ITEMS.map(item => (
+                                    <div key={item.id} onClick={() => setActiveTab(item.id)}
+                                        class={`sidebar-item ${activeTab===item.id?'active':''}`}>
+                                        <span class="icon">{item.icon}</span>
+                                        <span>{item.label}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            {user&&(
+                                <div class="p-4 border-t border-white/10">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <div class="w-8 h-8 rounded-full bg-blue-400 flex items-center justify-center text-sm">👤</div>
+                                        <div class="flex-1 min-w-0">
+                                            <p class="text-xs font-bold text-white truncate">{user.displayName||'거인'}</p>
+                                            <p class="text-[10px] text-white/50 truncate">{user.email}</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={()=>auth.signOut()} class="w-full text-xs text-white/60 hover:text-white py-1 text-center transition-colors">로그아웃</button>
+                                </div>
+                            )}
+                        </nav>
+
+                        {/* 콘텐츠 영역 */}
+                        <div class="flex-1 overflow-y-auto pb-24 md:pb-8 bg-gray-50">
+                            {renderContent()}
+                        </div>
+                    </div>
+
+                    {/* 하단 네비게이션 (모바일) */}
+                    <nav class="bottom-nav bg-white border-t border-gray-200 justify-around p-2 flex-shrink-0 w-full z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] md:hidden">
+                        {NAV_ITEMS.filter(i => i.id !== 'settings').map(item => (
+                            <button key={item.id} onClick={() => setActiveTab(item.id)}
+                                class={`flex flex-col items-center flex-1 py-1 ${activeTab===item.id?'text-blue-600':'text-gray-400'}`}>
+                                <span class="text-lg mb-0.5">{item.icon}</span>
+                                <span class="text-[9px] font-bold">{item.label}</span>
+                            </button>
+                        ))}
+                    </nav>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
