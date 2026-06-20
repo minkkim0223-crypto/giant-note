@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ko">
-<head> 
+<head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>거인의 공부 종합 앱</title>
@@ -207,20 +207,51 @@
                         auto_select: false,
                         ux_mode: 'popup',
                     });
-                    const container = document.getElementById('gsi-button-container');
-                    if (container) {
-                        window.google.accounts.id.renderButton(container, {
-                            theme: 'outline', size: 'large', width: '320', text: 'signin_with', locale: 'ko'
-                        });
-                    }
                 };
                 if (window.google && window.google.accounts) { init(); }
                 else {
                     const s = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
                     if (s) s.addEventListener('load', init);
-                    else setTimeout(init, 2000);
+                    setTimeout(init, 1500);
                 }
             }, [handleGoogleCredential, user]);
+
+            const signInWithGoogle = async () => {
+                if (!window.google || !window.google.accounts) {
+                    alert("Google 로그인을 준비 중입니다. 잠시 후 다시 시도해주세요.");
+                    return;
+                }
+                setIsLoggingIn(true);
+                try {
+                    window.google.accounts.id.prompt((notification) => {
+                        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+                            // One Tap 차단 시 OAuth 팝업으로 폴백
+                            const client = window.google.accounts.oauth2.initTokenClient({
+                                client_id: GOOGLE_CLIENT_ID,
+                                scope: 'email profile',
+                                callback: async (tokenResponse) => {
+                                    if (tokenResponse.error) {
+                                        setIsLoggingIn(false);
+                                        alert("로그인 오류: " + tokenResponse.error);
+                                        return;
+                                    }
+                                    try {
+                                        const credential = firebase.auth.GoogleAuthProvider.credential(null, tokenResponse.access_token);
+                                        await auth.signInWithCredential(credential);
+                                    } catch(e) {
+                                        setIsLoggingIn(false);
+                                        alert("로그인 오류: " + e.message);
+                                    }
+                                },
+                            });
+                            client.requestAccessToken();
+                        }
+                    });
+                } catch(e) {
+                    setIsLoggingIn(false);
+                    alert("로그인 오류: " + e.message);
+                }
+            };
 
             const showToast = (msg) => { setToastMessage(msg); setTimeout(() => setToastMessage(''), 3000); };
             const changeDate = (offset) => {
