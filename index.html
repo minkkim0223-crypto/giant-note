@@ -201,12 +201,13 @@
             // PDRF
             const [selectedPdrfId, setSelectedPdrfId] = useState(null);
             const [microInput, setMicroInput] = useState("");
-            // [개선 4] Date.now() 기반 타이머 - 백그라운드에서도 동작
-            const [timerStartedAt, setTimerStartedAt] = useState(null); // epoch ms
-            const [timerElapsed, setTimerElapsed] = useState(0);        // 누적 경과 seconds
+            // [개선 4] Date.now() 기반 타이머
+            const [timerStartedAt, setTimerStartedAt] = useState(null); // 현재 세션 시작 epoch ms
+            const [timerElapsed, setTimerElapsed] = useState(0);        // 이전 세션 누적 seconds
             const [timerActive, setTimerActive] = useState(false);
-            const [timerDuration] = useState(300);
-            const timerRafRef = useRef(null);
+            const [tick, setTick] = useState(0); // 매초 리렌더 트리거
+            const TIMER_DURATION = 300;
+            const intervalRef = useRef(null);
             // [개선 1] PDRF 과제명 인라인 수정
             const [editingPdrfMainTask, setEditingPdrfMainTask] = useState(false);
 
@@ -219,30 +220,33 @@
             const activePdrf = currentPdrfList.find(t=>t.id===selectedPdrfId) || null;
             const currentRetro = retroRecords[selectedDate] || { liked:"", lacked:"", learned:"", longedFor:"", giantFeedback:"", isCompleted:false };
 
-            // 타이머 남은 시간 계산
-            const timeLeft = Math.max(0, timerDuration - timerElapsed - (timerActive && timerStartedAt ? Math.floor((Date.now()-timerStartedAt)/1000) : 0));
+            // 타이머 남은 시간: tick이 바뀔 때마다 재계산되어 화면 업데이트
+            const currentElapsed = timerActive && timerStartedAt ? Math.floor((Date.now()-timerStartedAt)/1000) : 0;
+            const timeLeft = Math.max(0, TIMER_DURATION - timerElapsed - currentElapsed);
 
             useEffect(()=>{setSelectedPdrfId(null);resetTimer();},[selectedDate,activeTab]);
             useEffect(()=>{resetTimer();},[selectedPdrfId]);
 
-            // [개선 4] RAF 기반 타이머
+            // [개선 4] setInterval + Date.now() 타이머
+            // - setInterval로 매초 tick을 올려 리렌더 트리거
+            // - 실제 경과 시간은 Date.now() 기준으로 계산하므로 백그라운드에서도 정확
             useEffect(()=>{
                 if(timerActive){
-                    const tick = () => {
+                    intervalRef.current = setInterval(()=>{
                         const elapsed = timerElapsed + (timerStartedAt ? Math.floor((Date.now()-timerStartedAt)/1000) : 0);
-                        if(elapsed>=timerDuration){
+                        if(elapsed >= TIMER_DURATION){
+                            clearInterval(intervalRef.current);
                             setTimerActive(false);
-                            setTimerElapsed(timerDuration);
+                            setTimerElapsed(TIMER_DURATION);
                             setTimerStartedAt(null);
                             showToast("시간이 종료되었습니다!");
                         } else {
-                            timerRafRef.current = requestAnimationFrame(tick);
+                            setTick(t => t+1); // 리렌더 트리거
                         }
-                    };
-                    timerRafRef.current = requestAnimationFrame(tick);
-                    return ()=>cancelAnimationFrame(timerRafRef.current);
+                    }, 1000);
+                    return ()=>clearInterval(intervalRef.current);
                 }
-            },[timerActive]);
+            },[timerActive, timerStartedAt, timerElapsed]);
 
             const startTimer = () => {
                 if(timerActive) return;
@@ -256,10 +260,11 @@
                 setTimerActive(false);
             };
             const resetTimer = () => {
-                cancelAnimationFrame(timerRafRef.current);
+                clearInterval(intervalRef.current);
                 setTimerActive(false);
                 setTimerStartedAt(null);
                 setTimerElapsed(0);
+                setTick(0);
             };
 
             useEffect(()=>{
